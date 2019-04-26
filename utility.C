@@ -2,10 +2,6 @@
 #include "../inc/root.h"
 #include "../inc/utility.h"
 
-
-#test
-
-
 Double_t fluence(Double_t voltage) {
 
   Double_t c;
@@ -61,8 +57,8 @@ Int_t get_biasdata2(Char_t *start_datetime, Char_t *end_datetime,
     tx = values.Tokenize(",");
     cout << values << endl;
     for (Int_t i = 0; i <= tx->GetLast(); i++) { 
-      ejm[i] = *(tx->At(i));
-      cout << ejm[i] << endl;
+      // ejm[i] = *(tx->At(i));
+      // cout << ejm[i] << endl;
     }
 
     cout << endl;
@@ -140,6 +136,72 @@ Int_t get_raddata(Char_t *start_datetime, Char_t *end_datetime,
 
   cout << "Channel " << channel << " counts: " << ipt << endl;
   
+  delete db;
+  return ipt;
+}
+
+Int_t get_raddata2(Char_t *start_datetime, Char_t *end_datetime, 
+		  Double_t **channel, Double_t **time, Double_t **radfet, 
+		  Double_t **si, Double_t **temp) {
+
+  // TDatime start_time(start_datetime);
+  // ULong_t ustart_time = start_time.Convert();
+  // TDatime stop_time(end_datetime);
+  // ULong_t ustop_time = stop_time.Convert();
+  
+  // First get the rad monitoring data
+
+  TString qname, query;
+
+  TSQLServer *db = TSQLServer::Connect("pgsql://phnxdb0.phenix.bnl.gov/daq", 
+                                       "", ""); 
+  query = "SELECT * FROM radmon WHERE read_datetime > \'";
+  query += start_datetime; 
+  query += "\' AND read_datetime < \'";
+  query += end_datetime; 
+  query += "\' ORDER by read_datetime ASC";
+  
+  cout << "SQL query: " << query << endl;
+
+  TSQLResult *res = db->Query( query );
+  Int_t nrows = res->GetRowCount();
+
+  *channel = new Double_t[nrows];
+  *time = new Double_t[nrows];
+  *radfet = new Double_t[nrows];
+  *si = new Double_t[nrows];
+  *temp = new Double_t[nrows];
+
+  TSQLRow *row;
+
+  Int_t ipt = 0;
+
+  for (Int_t i = 0; i < nrows; i++) {
+    row = res->Next();
+    
+    if (strtod(row->GetField(5), NULL) < 5. &&
+	strtod(row->GetField(8), NULL) < 20. &&
+	strtod(row->GetField(11), NULL) < 20. &&
+	strtod(row->GetField(14), NULL) < 20. &&
+	TMath::Abs(strtod(row->GetField(13), NULL)/strtod(row->GetField(12), NULL) - 1.) < 0.01 &&
+	TMath::Abs(strtod(row->GetField(4), NULL)/strtod(row->GetField(3), NULL) - 1.) < 0.01) {
+
+      TDatime read_time(row->GetField(1));
+
+ 
+      *(*channel+ipt) = strtod(row->GetField(2), NULL);
+      *(*time+ipt) = (Double_t) (read_time.Convert());
+      *(*temp+ipt) = strtod(row->GetField(5), NULL);
+      *(*radfet+ipt) = strtod(row->GetField(14), NULL);
+      *(*si+ipt) = strtod(row->GetField(11), NULL);
+
+//       cout << "database " << ipt << ": " << row->GetField(1) << "  " <<
+// 	*(*time+ipt) << endl;  
+      ipt++;
+
+    }
+  }
+
   delete db;
   return ipt;
 }
@@ -319,7 +381,8 @@ Int_t get_magstatus(Char_t *start_datetime) {
   return status;
 }
 
-void setupGraph(TGraph *grt, Int_t index,
+void setupGraph(TGraph *grt, 
+		Int_t flagDate, Int_t index,
 		Float_t min_tscale, Float_t max_tscale, 
 		ULong_t ustart_time, ULong_t ustop_time,
 		TString xtitle, TString ytitle) {
@@ -332,24 +395,26 @@ void setupGraph(TGraph *grt, Int_t index,
 		      3, 3, 3, 3, 3};
 
   grt->GetXaxis()->SetTitle(xtitle);
-  grt->GetXaxis()->SetTitleOffset(0.3);
-  grt->GetXaxis()->SetLabelSize(0.025);
+  grt->GetXaxis()->SetTitleOffset(0.5);
+  grt->GetXaxis()->SetTitleSize(0.06);
+  grt->GetXaxis()->SetLabelSize(0.05);
   grt->GetXaxis()->SetLabelOffset(0.05);
-  grt->GetXaxis()->SetNdivisions( -604 );
 
-  if (ustart_time != ustop_time) { 
+  if (flagDate) { 
+    grt->GetXaxis()->SetNdivisions( -604 );
     grt->GetXaxis()->SetTimeDisplay(1);
     grt->GetXaxis()->SetTimeFormat("#splitline{%m/%d/%y}{%H:%M:%S}");
     grt->GetXaxis()->SetLimits(0., ustop_time-ustart_time);
   }
 
   grt->GetYaxis()->SetTitle(ytitle);
-  grt->GetYaxis()->SetLabelSize(0.035);
+  grt->GetYaxis()->SetTitleOffset(0.5);
+  grt->GetYaxis()->SetTitleSize(0.06);
+  grt->GetYaxis()->SetLabelSize(0.05);
   grt->GetYaxis()->SetLabelOffset(0.01);
-  grt->GetYaxis()->SetTitleOffset(1.3);
 
-  grt->SetMinimum(min_tscale);
-  if (max_tscale != 0.) grt->SetMaximum(max_tscale);
+  if (max_tscale != min_tscale) grt->SetMinimum(min_tscale);
+  if (max_tscale != min_tscale) grt->SetMaximum(max_tscale);
 
   grt->SetMarkerSize(0.5 );
   grt->SetMarkerStyle( marker[index] );
@@ -359,27 +424,31 @@ void setupGraph(TGraph *grt, Int_t index,
   return;
 }
 
-void setupMGraph(TMultiGraph *grt, 
+void setupMGraph(TMultiGraph *grt, int flagDate, 
 		 Float_t min_tscale, Float_t max_tscale, 
 		 ULong_t ustart_time, ULong_t ustop_time,
 		 TString xtitle, TString ytitle) {
 
+
   grt->GetXaxis()->SetTitle(xtitle);
   grt->GetXaxis()->SetTitleOffset(0.3);
-  grt->GetXaxis()->SetLabelSize(0.025);
+  grt->GetXaxis()->SetLabelSize(0.05);
   grt->GetXaxis()->SetLabelOffset(0.05);
-  grt->GetXaxis()->SetNdivisions( -604 );
-  grt->GetXaxis()->SetTimeDisplay(1);
-  grt->GetXaxis()->SetTimeFormat("#splitline{%m/%d/%y}{%H:%M:%S}");
-  grt->GetXaxis()->SetLimits(0., ustop_time-ustart_time);
- 
+
+  if (flagDate) { 
+    grt->GetXaxis()->SetNdivisions( -604 );
+    grt->GetXaxis()->SetTimeDisplay(1);
+    grt->GetXaxis()->SetTimeFormat("#splitline{%m/%d/%y}{%H:%M:%S}");
+    grt->GetXaxis()->SetLimits(0., ustop_time-ustart_time);
+  }
+
   grt->GetYaxis()->SetTitle(ytitle);
-  grt->GetYaxis()->SetLabelSize(0.035);
+  grt->GetYaxis()->SetLabelSize(0.05);
   grt->GetYaxis()->SetLabelOffset(0.01);
   grt->GetYaxis()->SetTitleOffset(1.5);
 
-  if (min_tscale != 0.) grt->SetMinimum(min_tscale);
-  if (max_tscale != 0.) grt->SetMaximum(max_tscale);
+  if (max_tscale != min_tscale) grt->SetMinimum(min_tscale);
+  if (max_tscale != min_tscale) grt->SetMaximum(max_tscale);
 
   return;
 }
